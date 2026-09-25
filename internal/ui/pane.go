@@ -29,7 +29,10 @@ func NewPane(title string) Pane {
 // SetEntries replaces the visible directory and clamps the cursor.
 func (p *Pane) SetEntries(entries []filesystem.Entry) {
 	p.Entries = entries
-	if p.Cursor >= len(p.Entries) {
+	if p.Selected == nil {
+		p.Selected = make(map[string]struct{})
+	}
+	if p.Cursor >= len(p.Entries) || p.Cursor < 0 {
 		p.Cursor = max(0, len(p.Entries)-1)
 	}
 	p.clampOffset(0)
@@ -124,11 +127,10 @@ func (p Pane) header(styles Styles, width int) string {
 	if p.Path != "" {
 		title += "  " + p.Path
 	}
-	title = fit(title, width, styles.Title)
 	if p.Loading {
-		return title + " " + styles.Muted.Render("(loading)")
+		title += " (loading)"
 	}
-	return title
+	return fit(title, width, styles.Title)
 }
 
 func (p Pane) visibleRows(styles Styles, width, height int) []string {

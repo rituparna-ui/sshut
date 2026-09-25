@@ -9,6 +9,17 @@ import (
 	"github.com/rituu/sshut/internal/filesystem"
 )
 
+func TestZeroValuePaneCanSelect(t *testing.T) {
+	t.Parallel()
+
+	var pane Pane
+	pane.SetEntries([]filesystem.Entry{{Name: "file.txt", Path: "/tmp/file.txt", Kind: filesystem.KindFile}})
+	pane.ToggleSelected()
+	if len(pane.Selection()) != 1 {
+		t.Fatal("zero-value pane did not initialize its selection map")
+	}
+}
+
 func TestPaneNavigationAndSelection(t *testing.T) {
 	t.Parallel()
 
