@@ -76,6 +76,7 @@ type FS interface {
 	Mkdir(context.Context, string, os.FileMode) error
 	MkdirAll(context.Context, string, os.FileMode) error
 	Rename(context.Context, string, string) error
+	Replace(context.Context, string, string) error
 	RemoveAll(context.Context, string) error
 	Readlink(context.Context, string) (string, error)
 	Symlink(context.Context, string, string) error

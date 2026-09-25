@@ -179,7 +179,16 @@ func (f *FS) Create(ctx context.Context, name string, mode os.FileMode) (filesys
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return f.client.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+	file, err := f.client.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.client.Chmod(name, mode); err != nil {
+		_ = file.Close()
+		_ = f.client.Remove(name)
+		return nil, fmt.Errorf("set file mode: %w", err)
+	}
+	return file, nil
 }
 
 // Mkdir creates one remote directory.
@@ -218,6 +227,26 @@ func (f *FS) Rename(ctx context.Context, oldName, newName string) error {
 	}
 	if _, err := f.client.Lstat(newName); err == nil {
 		return fmt.Errorf("destination already exists: %s", newName)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return f.client.Rename(oldName, newName)
+}
+
+// Replace moves oldName onto newName. OpenSSH's POSIX rename extension is used
+// when advertised; otherwise an existing destination is removed immediately
+// before the rename.
+func (f *FS) Replace(ctx context.Context, oldName, newName string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, ok := f.client.HasExtension("posix-rename@openssh.com"); ok {
+		return f.client.PosixRename(oldName, newName)
+	}
+	if _, err := f.client.Lstat(newName); err == nil {
+		if err := f.client.Remove(newName); err != nil {
+			return err
+		}
 	} else if !os.IsNotExist(err) {
 		return err
 	}

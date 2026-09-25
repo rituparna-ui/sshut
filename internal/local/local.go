@@ -94,6 +94,12 @@ func (*FS) Rename(_ context.Context, oldName, newName string) error {
 	return os.Rename(oldName, newName)
 }
 
+// Replace atomically replaces newName with oldName when the platform supports
+// same-filesystem rename semantics.
+func (*FS) Replace(_ context.Context, oldName, newName string) error {
+	return os.Rename(oldName, newName)
+}
+
 // RemoveAll recursively removes a local entry.
 func (*FS) RemoveAll(_ context.Context, name string) error {
 	return os.RemoveAll(name)

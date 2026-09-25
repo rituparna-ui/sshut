@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -64,6 +65,28 @@ func TestLocalFilesystem(t *testing.T) {
 	}
 	if err := backend.Rename(ctx, filepath.Join(root, "docs"), filepath.Join(root, "renamed.txt")); err == nil {
 		t.Fatal("rename over existing destination unexpectedly succeeded")
+	}
+
+	replacementPath := filepath.Join(root, "replacement.txt")
+	replacement, err := backend.Create(ctx, replacementPath, 0o644)
+	if err != nil {
+		t.Fatalf("Create replacement: %v", err)
+	}
+	if _, err := replacement.Write([]byte("replacement")); err != nil {
+		t.Fatalf("Write replacement: %v", err)
+	}
+	if err := replacement.Close(); err != nil {
+		t.Fatalf("Close replacement: %v", err)
+	}
+	if err := backend.Replace(ctx, replacementPath, filepath.Join(root, "renamed.txt")); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, "renamed.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(contents) != "replacement" {
+		t.Fatalf("replacement contents = %q, want replacement", contents)
 	}
 
 	linkPath := filepath.Join(root, "link")
