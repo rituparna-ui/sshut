@@ -3,6 +3,13 @@
 A split-pane terminal file manager for transferring files between the local
 machine and a remote host over SSH/SFTP.
 
+## Requirements
+
+- Go 1.26 or newer
+- An OpenSSH client available as `ssh`
+- A remote SSH server with the SFTP subsystem enabled
+- Working non-interactive authentication (configured key and/or `ssh-agent`)
+
 Run sshut without arguments to open the SSH destination prompt:
 
 ```sh
@@ -14,6 +21,12 @@ Alternatively, pass an OpenSSH destination directly:
 ```sh
 go run ./cmd/sshut production
 go run ./cmd/sshut user@example.com
+```
+
+Build a local binary with:
+
+```sh
+go build -o sshut ./cmd/sshut
 ```
 
 sshut invokes the system `ssh` client with `BatchMode=yes`, so configured keys,
