@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -28,48 +29,81 @@ const (
 
 // Model is the root Bubble Tea model.
 type Model struct {
-	localFS     filesystem.FS
-	remoteFS    filesystem.FS
-	local       ui.Pane
-	remote      ui.Pane
-	destination string
-	active      side
-	styles      ui.Styles
-	width       int
-	height      int
-	status      string
-	lastErr     error
-	quitting    bool
+	localFS      filesystem.FS
+	remoteFS     filesystem.FS
+	local        ui.Pane
+	remote       ui.Pane
+	destination  string
+	active       side
+	styles       ui.Styles
+	width        int
+	height       int
+	status       string
+	lastErr      error
+	quitting     bool
+	prompting    bool
+	promptErr    error
+	connectInput textinput.Model
 }
 
 var _ tea.Model = Model{}
 
-// New creates sshut for an optional SSH destination. An empty destination runs
-// in local-only mode until the interactive connection prompt is added.
+// New creates sshut for an optional SSH destination. An empty destination
+// opens the interactive connection prompt.
 func New(destination string) Model {
 	model := Model{
-		localFS:     local.New(),
-		local:       ui.NewPane("LOCAL"),
-		styles:      ui.NewStyles(),
-		destination: destination,
-		active:      localSide,
-		status:      "Ready",
+		localFS: local.New(),
+		local:   ui.NewPane("LOCAL"),
+		styles:  ui.NewStyles(),
+		active:  localSide,
+		status:  "Ready",
 	}
-	if destination != "" {
-		model.remote = ui.NewPane("REMOTE " + destination)
-		model.remote.Loading = true
-		model.status = "Connecting to " + destination + "…"
+	if destination == "" {
+		model.showConnectionPrompt()
+	} else {
+		model.startRemote(destination)
 	}
 	return model
 }
 
-// NewLocal creates a local-only model. It is retained as a small constructor
-// for tests and the first incremental build.
-func NewLocal() Model { return New("") }
+// NewLocal creates a local-only model without the startup prompt.
+func NewLocal() Model {
+	model := New("")
+	model.prompting = false
+	model.connectInput = textinput.Model{}
+	model.status = "Local only"
+	return model
+}
+
+func (m *Model) showConnectionPrompt() {
+	input := textinput.New()
+	input.Prompt = "SSH destination: "
+	input.Placeholder = "user@host or ~/.ssh/config alias"
+	input.CharLimit = 256
+	input.SetWidth(48)
+	m.connectInput = input
+	m.prompting = true
+	m.promptErr = nil
+	m.status = "Connect a remote host"
+}
+
+func (m *Model) startRemote(destination string) {
+	m.destination = destination
+	m.remote = ui.NewPane("REMOTE " + destination)
+	m.remote.Loading = true
+	m.prompting = false
+	m.promptErr = nil
+	m.lastErr = nil
+	m.connectInput.Blur()
+	m.status = "Connecting to " + destination + "…"
+}
 
 // Init starts independent local and remote loading commands.
 func (m Model) Init() tea.Cmd {
 	localCommand := loadHome(localSide, m.localFS)
+	if m.prompting {
+		return tea.Batch(localCommand, m.connectInput.Focus())
+	}
 	if m.destination == "" {
 		return localCommand
 	}
@@ -135,6 +169,10 @@ func (m Model) applyDirectoryLoaded(msg directoryLoadedMsg) (tea.Model, tea.Cmd)
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.prompting {
+		return m.handlePromptKey(msg)
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		m.quitting = true
@@ -144,6 +182,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "shift+tab":
 		m.active = m.active.other()
+		return m, nil
+	case "c":
+		if m.destination != "" && m.remoteFS == nil {
+			m.showConnectionPrompt()
+		}
 		return m, nil
 	}
 
@@ -183,6 +226,27 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "esc":
+		m.quitting = true
+		return m, tea.Quit
+	case "enter":
+		destination := strings.TrimSpace(m.connectInput.Value())
+		if destination == "" {
+			m.promptErr = fmt.Errorf("SSH destination cannot be empty")
+			return m, nil
+		}
+		m.startRemote(destination)
+		return m, connectRemote(destination)
+	}
+
+	var command tea.Cmd
+	m.connectInput, command = m.connectInput.Update(msg)
+	m.promptErr = m.connectInput.Err
+	return m, command
 }
 
 func (m Model) openCurrent() (tea.Model, tea.Cmd) {
@@ -254,6 +318,30 @@ func (which side) other() side {
 	return remoteSide
 }
 
+func (m Model) connectionView(width, height int) tea.View {
+	input := m.connectInput
+	input.SetWidth(max(8, width-32))
+	content := []string{
+		m.styles.Title.Render("sshut"),
+		m.styles.Muted.Render("Local and remote files over system OpenSSH/SFTP"),
+		"",
+		input.View(),
+		m.styles.Footer.Render("enter connect  •  esc quit"),
+	}
+	if m.promptErr != nil {
+		content = append(content, m.styles.Error.Render(m.promptErr.Error()))
+	}
+	panel := m.styles.Active.
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		MaxWidth(max(4, width-2)).
+		Render(lipgloss.JoinVertical(lipgloss.Left, content...))
+	view := tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, panel))
+	view.AltScreen = true
+	view.WindowTitle = "sshut — connect"
+	return view
+}
+
 // View renders one or two filesystem panes plus status and key hints.
 func (m Model) View() tea.View {
 	if m.quitting {
@@ -262,6 +350,9 @@ func (m Model) View() tea.View {
 	width, height := m.width, m.height
 	if width <= 0 || height <= 0 {
 		width, height = 80, 24
+	}
+	if m.prompting {
+		return m.connectionView(width, height)
 	}
 
 	footerHeight := 2
@@ -284,7 +375,7 @@ func (m Model) View() tea.View {
 		statusStyle = m.styles.Error
 		statusText = "Error: " + m.lastErr.Error()
 	}
-	keys := " tab focus  ↑/↓ move  enter open  space select  f5 refresh  q quit "
+	keys := " tab focus  ↑/↓ move  enter open  space select  f5 refresh  c connect  q quit "
 	if m.destination == "" {
 		keys = " ↑/↓ move  enter open  space select  f5 refresh  q quit "
 	}

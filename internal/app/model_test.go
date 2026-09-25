@@ -63,6 +63,34 @@ func TestModelLoadsLocalHome(t *testing.T) {
 	}
 }
 
+func TestConnectionPromptStartsRemote(t *testing.T) {
+	t.Parallel()
+
+	model := New("")
+	if !model.prompting {
+		t.Fatal("New(\"\") did not open the connection prompt")
+	}
+	view := model.View().Content
+	for _, want := range []string{"sshut", "SSH destination", "enter connect"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("prompt does not contain %q:\n%s", want, view)
+		}
+	}
+
+	model.connectInput.SetValue("production")
+	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(Model)
+	if model.prompting || model.destination != "production" {
+		t.Fatalf("prompt state = prompting:%v destination:%q", model.prompting, model.destination)
+	}
+	if !model.remote.Loading {
+		t.Fatal("remote pane was not put into loading state")
+	}
+	if command == nil {
+		t.Fatal("submitting destination returned no connect command")
+	}
+}
+
 func TestModelRemotePaneAndFocus(t *testing.T) {
 	t.Parallel()
 

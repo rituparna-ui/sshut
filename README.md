@@ -3,13 +3,13 @@
 A split-pane terminal file manager for transferring files between the local
 machine and a remote host over SSH/SFTP.
 
-Run the local-only browser with:
+Run sshut without arguments to open the SSH destination prompt:
 
 ```sh
 go run ./cmd/sshut
 ```
 
-Pass an OpenSSH destination to open the split local/remote view:
+Alternatively, pass an OpenSSH destination directly:
 
 ```sh
 go run ./cmd/sshut production
