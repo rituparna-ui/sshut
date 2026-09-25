@@ -44,6 +44,7 @@ type Model struct {
 	prompting    bool
 	promptErr    error
 	connectInput textinput.Model
+	modal        modalState
 }
 
 var _ tea.Model = Model{}
@@ -148,6 +149,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case directoryLoadedMsg:
 		return m.applyDirectoryLoaded(msg)
+
+	case mutationDoneMsg:
+		return m.applyMutationResult(msg)
+
+	case pathResolvedMsg:
+		backend, pane := m.backendAndPane(msg.side)
+		if backend == nil || pane == nil {
+			return m, nil
+		}
+		if msg.err != nil {
+			pane.Loading = false
+			return m.fail(msg.err)
+		}
+		pane.Loading = true
+		pane.Err = nil
+		m.lastErr = nil
+		return m, loadDirectory(msg.side, backend, msg.path)
 	}
 	return m, nil
 }
@@ -169,6 +187,9 @@ func (m Model) applyDirectoryLoaded(msg directoryLoadedMsg) (tea.Model, tea.Cmd)
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.modal.active() {
+		return m.handleModalKey(msg)
+	}
 	if m.prompting {
 		return m.handlePromptKey(msg)
 	}
@@ -203,7 +224,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		pane.Move(-10)
 	case "pgdown":
 		pane.Move(10)
-	case "home", "g":
+	case "home":
 		pane.Cursor = 0
 	case "end", "G":
 		pane.Move(max(0, len(pane.Entries)-1))
@@ -217,6 +238,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openCurrent()
 	case "backspace", "u":
 		return m.goToParent()
+	case "n":
+		return m.openNewDirectory()
+	case "r":
+		return m.openRename()
+	case "d":
+		return m.openDeleteConfirmation()
+	case "g":
+		return m.openGoToPath()
 	case "f5":
 		backend := m.activeBackend()
 		if backend != nil && pane.Path != "" {
@@ -246,6 +275,168 @@ func (m Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var command tea.Cmd
 	m.connectInput, command = m.connectInput.Update(msg)
 	m.promptErr = m.connectInput.Err
+	return m, command
+}
+
+func (m Model) applyMutationResult(msg mutationDoneMsg) (tea.Model, tea.Cmd) {
+	backend, pane := m.backendAndPane(msg.side)
+	if backend == nil || pane == nil {
+		return m, nil
+	}
+	pane.Loading = false
+	if msg.err != nil {
+		m.lastErr = msg.err
+		m.status = fmt.Sprintf("%s failed", msg.kind)
+	} else {
+		pane.ClearSelection()
+		m.lastErr = nil
+		m.status = fmt.Sprintf("%s complete", msg.kind)
+	}
+	pane.Err = nil
+	return m, loadDirectory(msg.side, backend, msg.refreshPath)
+}
+
+func (m Model) openNewDirectory() (tea.Model, tea.Cmd) {
+	pane, backend := m.activePane(), m.activeBackend()
+	if pane == nil || backend == nil || pane.Path == "" {
+		return m, nil
+	}
+	m.modal = newTextModal(modalNewDirectory, "Name: ", "new-directory", "")
+	return m, m.modal.input.Focus()
+}
+
+func (m Model) openRename() (tea.Model, tea.Cmd) {
+	pane, backend := m.activePane(), m.activeBackend()
+	if pane == nil || backend == nil {
+		return m, nil
+	}
+	entries := pane.Selection()
+	if len(entries) != 1 {
+		if len(entries) > 1 {
+			m.status = "Rename accepts one selected entry"
+		}
+		return m, nil
+	}
+	entry := entries[0]
+	if entry.Name == ".." {
+		return m, nil
+	}
+	m.modal = newTextModal(modalRename, "Rename to: ", entry.Name, entry.Name)
+	return m, m.modal.input.Focus()
+}
+
+func (m Model) openDeleteConfirmation() (tea.Model, tea.Cmd) {
+	pane := m.activePane()
+	if pane == nil {
+		return m, nil
+	}
+	entries := pane.Selection()
+	if len(entries) == 0 {
+		return m, nil
+	}
+	m.modal = modalState{
+		kind:    modalDelete,
+		target:  joinSelectedSummary(entries),
+		entries: entries,
+	}
+	return m, nil
+}
+
+func (m Model) openGoToPath() (tea.Model, tea.Cmd) {
+	pane := m.activePane()
+	if pane == nil || pane.Path == "" {
+		return m, nil
+	}
+	m.modal = newTextModal(modalGoToPath, "Path: ", pane.Path, pane.Path)
+	return m, m.modal.input.Focus()
+}
+
+func (m Model) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		m.modal.close()
+		m.quitting = true
+		return m, tea.Quit
+	case "esc":
+		m.modal.close()
+		return m, nil
+	}
+
+	if m.modal.kind == modalDelete {
+		switch msg.String() {
+		case "y", "Y":
+			pane := m.activePane()
+			backend := m.activeBackend()
+			directory := pane.Path
+			entries := append([]filesystem.Entry(nil), m.modal.entries...)
+			m.modal.close()
+			if backend == nil {
+				return m, nil
+			}
+			pane.Loading = true
+			return m, deleteEntries(m.active, backend, directory, entries)
+		case "n", "N":
+			m.modal.close()
+			return m, nil
+		default:
+			return m, nil
+		}
+	}
+
+	if msg.String() == "enter" {
+		value := strings.TrimSpace(m.modal.input.Value())
+		pane, backend := m.activePane(), m.activeBackend()
+		if backend == nil || pane == nil {
+			m.modal.close()
+			return m, nil
+		}
+		switch m.modal.kind {
+		case modalNewDirectory:
+			if err := filesystem.ValidateName(value); err != nil {
+				m.modal.err = err
+				return m, nil
+			}
+			directory := pane.Path
+			m.modal.close()
+			pane.Loading = true
+			return m, createDirectory(m.active, backend, directory, value)
+		case modalRename:
+			if err := filesystem.ValidateName(value); err != nil {
+				m.modal.err = err
+				return m, nil
+			}
+			entries := pane.Selection()
+			if len(entries) != 1 || entries[0].Name == ".." {
+				m.modal.close()
+				return m, nil
+			}
+			entry := entries[0]
+			newPath := backend.Join(pane.Path, value)
+			if newPath == entry.Path {
+				m.modal.close()
+				return m, nil
+			}
+			m.modal.close()
+			pane.Loading = true
+			return m, renameEntry(m.active, backend, entry.Path, newPath)
+		case modalGoToPath:
+			if value == "" {
+				m.modal.err = fmt.Errorf("path cannot be empty")
+				return m, nil
+			}
+			directory := pane.Path
+			if !strings.HasPrefix(value, "/") && !strings.Contains(value, `:\`) {
+				value = backend.Join(directory, value)
+			}
+			m.modal.close()
+			pane.Loading = true
+			return m, resolveDirectory(m.active, backend, value)
+		}
+	}
+
+	var command tea.Cmd
+	m.modal.input, command = m.modal.input.Update(msg)
+	m.modal.err = m.modal.input.Err
 	return m, command
 }
 
@@ -354,6 +545,12 @@ func (m Model) View() tea.View {
 	if m.prompting {
 		return m.connectionView(width, height)
 	}
+	if m.modal.active() {
+		view := tea.NewView(m.modal.view(m.styles, width, height))
+		view.AltScreen = true
+		view.WindowTitle = "sshut"
+		return view
+	}
 
 	footerHeight := 2
 	paneHeight := max(3, height-footerHeight)
@@ -375,9 +572,9 @@ func (m Model) View() tea.View {
 		statusStyle = m.styles.Error
 		statusText = "Error: " + m.lastErr.Error()
 	}
-	keys := " tab focus  ↑/↓ move  enter open  space select  f5 refresh  c connect  q quit "
+	keys := " tab focus  enter open  space select  n new  r rename  d delete  g path  f5 refresh  q quit "
 	if m.destination == "" {
-		keys = " ↑/↓ move  enter open  space select  f5 refresh  q quit "
+		keys = " enter open  space select  n new  r rename  d delete  g path  f5 refresh  q quit "
 	}
 	footer := lipgloss.JoinVertical(lipgloss.Left, statusStyle.Render(statusText), m.styles.Footer.Render(keys))
 	body := lipgloss.JoinVertical(lipgloss.Left, panes, footer)
