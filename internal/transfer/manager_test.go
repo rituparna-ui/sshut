@@ -157,6 +157,37 @@ func TestManagerCancelActive(t *testing.T) {
 	}
 }
 
+func TestManagerHandlesConflictResolver(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	sourceRoot := t.TempDir()
+	destinationRoot := t.TempDir()
+	writeTestFile(t, filepath.Join(sourceRoot, "file.txt"), "source")
+	writeTestFile(t, filepath.Join(destinationRoot, "file.txt"), "destination")
+	source := local.NewAt(sourceRoot)
+	destination := local.NewAt(destinationRoot)
+	entry := statTestEntry(t, source, filepath.Join(sourceRoot, "file.txt"))
+	resolver := ResolverFunc(func(_ context.Context, conflict Conflict) (Decision, error) {
+		return DecisionKeepBoth, nil
+	})
+
+	manager := NewManager(ctx)
+	defer manager.Close()
+	requestID, err := manager.Enqueue(Request{
+		SourceFS: source, DestinationFS: destination, DestinationDir: destinationRoot,
+		Entries: []filesystem.Entry{entry}, Resolver: resolver,
+	})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	terminal := waitForTerminalEvents(t, manager.Events(), 1)
+	if terminal[requestID].Phase != PhaseComplete {
+		t.Fatalf("terminal event = %#v", terminal[requestID])
+	}
+	assertFileContents(t, filepath.Join(destinationRoot, "file (1).txt"), "source")
+}
+
 func TestManagerRejectsInvalidRequest(t *testing.T) {
 	t.Parallel()
 

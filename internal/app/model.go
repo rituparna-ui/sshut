@@ -15,6 +15,7 @@ import (
 	"github.com/rituu/sshut/internal/filesystem"
 	"github.com/rituu/sshut/internal/local"
 	remotesftp "github.com/rituu/sshut/internal/sftp"
+	"github.com/rituu/sshut/internal/transfer"
 	"github.com/rituu/sshut/internal/ui"
 )
 
@@ -29,22 +30,28 @@ const (
 
 // Model is the root Bubble Tea model.
 type Model struct {
-	localFS      filesystem.FS
-	remoteFS     filesystem.FS
-	local        ui.Pane
-	remote       ui.Pane
-	destination  string
-	active       side
-	styles       ui.Styles
-	width        int
-	height       int
-	status       string
-	lastErr      error
-	quitting     bool
-	prompting    bool
-	promptErr    error
-	connectInput textinput.Model
-	modal        modalState
+	localFS               filesystem.FS
+	remoteFS              filesystem.FS
+	local                 ui.Pane
+	remote                ui.Pane
+	destination           string
+	active                side
+	styles                ui.Styles
+	width                 int
+	height                int
+	status                string
+	lastErr               error
+	quitting              bool
+	prompting             bool
+	promptErr             error
+	connectInput          textinput.Model
+	modal                 modalState
+	transfers             *transfer.Manager
+	conflicts             *conflictResolver
+	activityReaderPending bool
+	transferState         transferViewState
+	transferTargets       map[uint64]side
+	pendingConflict       *conflictRequest
 }
 
 var _ tea.Model = Model{}
@@ -52,12 +59,16 @@ var _ tea.Model = Model{}
 // New creates sshut for an optional SSH destination. An empty destination
 // opens the interactive connection prompt.
 func New(destination string) Model {
+	resolver := newConflictResolver()
 	model := Model{
-		localFS: local.New(),
-		local:   ui.NewPane("LOCAL"),
-		styles:  ui.NewStyles(),
-		active:  localSide,
-		status:  "Ready",
+		localFS:         local.New(),
+		local:           ui.NewPane("LOCAL"),
+		styles:          ui.NewStyles(),
+		active:          localSide,
+		status:          "Ready",
+		transfers:       transfer.NewManager(context.Background()),
+		conflicts:       resolver,
+		transferTargets: make(map[uint64]side),
 	}
 	if destination == "" {
 		model.showConnectionPrompt()
@@ -166,6 +177,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		pane.Err = nil
 		m.lastErr = nil
 		return m, loadDirectory(msg.side, backend, msg.path)
+
+	case transferActivityMsg:
+		m.activityReaderPending = false
+		if msg.done {
+			return m, nil
+		}
+		if msg.conflict != nil {
+			command := m.openConflict(msg.conflict)
+			next := waitForTransferActivity(m.transfers, m.conflicts)
+			m.activityReaderPending = true
+			if command != nil {
+				return m, tea.Batch(command, next)
+			}
+			return m, next
+		}
+		return m.applyQueueEvent(msg.event)
 	}
 	return m, nil
 }
@@ -188,6 +215,9 @@ func (m Model) applyDirectoryLoaded(msg directoryLoadedMsg) (tea.Model, tea.Cmd)
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.modal.active() {
+		if m.modal.kind == modalConflict {
+			return m.handleConflictKey(msg)
+		}
 		return m.handleModalKey(msg)
 	}
 	if m.prompting {
@@ -203,6 +233,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "shift+tab":
 		m.active = m.active.other()
+		return m, nil
+	case "right":
+		return m.queueTransfer(localSide)
+	case "left":
+		return m.queueTransfer(remoteSide)
+	case "ctrl+x":
+		m.transfers.CancelActive()
+		m.status = "Cancelling active transfer…"
 		return m, nil
 	case "c":
 		if m.destination != "" && m.remoteFS == nil {
@@ -552,7 +590,7 @@ func (m Model) View() tea.View {
 		return view
 	}
 
-	footerHeight := 2
+	footerHeight := 3
 	paneHeight := max(3, height-footerHeight)
 	var panes string
 	if m.destination == "" {
@@ -572,11 +610,14 @@ func (m Model) View() tea.View {
 		statusStyle = m.styles.Error
 		statusText = "Error: " + m.lastErr.Error()
 	}
-	keys := " tab focus  enter open  space select  n new  r rename  d delete  g path  f5 refresh  q quit "
-	if m.destination == "" {
-		keys = " enter open  space select  n new  r rename  d delete  g path  f5 refresh  q quit "
-	}
-	footer := lipgloss.JoinVertical(lipgloss.Left, statusStyle.Render(statusText), m.styles.Footer.Render(keys))
+	keys := " ← download  → upload  tab focus  enter open  space select  n/r/d/g  f5  q quit "
+	transferLine := m.transferLine(width)
+	footer := lipgloss.JoinVertical(
+		lipgloss.Left,
+		transferLine,
+		statusStyle.Render(statusText),
+		m.styles.Footer.Render(keys),
+	)
 	body := lipgloss.JoinVertical(lipgloss.Left, panes, footer)
 	view := tea.NewView(body)
 	view.AltScreen = true
@@ -587,6 +628,9 @@ func (m Model) View() tea.View {
 // Close releases local and remote resources after the Bubble Tea program exits.
 func (m Model) Close() error {
 	var errs []error
+	if m.transfers != nil {
+		m.transfers.Close()
+	}
 	if m.remoteFS != nil {
 		if err := m.remoteFS.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close remote: %w", err))

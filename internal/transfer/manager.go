@@ -15,11 +15,13 @@ var (
 
 // Request is one selected set of entries copied into a destination directory.
 type Request struct {
-	SourceFS       filesystem.FS
-	DestinationFS  filesystem.FS
-	DestinationDir string
-	Entries        []filesystem.Entry
-	Resolver       Resolver
+	SourceFS         filesystem.FS
+	DestinationFS    filesystem.FS
+	DestinationDir   string
+	Entries          []filesystem.Entry
+	Resolver         Resolver
+	SourceLabel      string
+	DestinationLabel string
 }
 
 // QueueEvent updates the state of a queued or active request.

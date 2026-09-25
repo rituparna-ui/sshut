@@ -21,7 +21,14 @@ sshut invokes the system `ssh` client with `BatchMode=yes`, so configured keys,
 The host must already be trusted and the server must provide the SFTP subsystem.
 
 Use `Tab` to switch panes, `↑`/`↓` or `j`/`k` to move, `Enter` to open a
-directory, `Space` to select, `F5` to refresh, and `q` to quit.
+directory, `Space` to select, `←` to download remote selections, and `→` to
+upload local selections. `n` creates a directory, `r` renames, `d` deletes,
+`g` goes to a path, and `F5` refreshes. `Ctrl+X` cancels the active transfer;
+`q` quits.
 
-> **Status:** remote browsing is implemented. File mutations and transfers are
-> being added in subsequent commits.
+Transfers are sequential and queued. Existing destinations open a conflict
+prompt with `o` overwrite, `s` skip, `k` keep both, and `x` cancel. Capitalized
+`O`, `S`, or `K` applies that decision to all remaining conflicts.
+
+> **Status:** local/remote browsing, file operations, queued transfers,
+> progress, cancellation, and conflict handling are implemented incrementally.

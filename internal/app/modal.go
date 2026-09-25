@@ -18,6 +18,7 @@ const (
 	modalRename
 	modalGoToPath
 	modalDelete
+	modalConflict
 )
 
 type modalState struct {
@@ -25,6 +26,7 @@ type modalState struct {
 	input   textinput.Model
 	err     error
 	target  string
+	message string
 	entries []filesystem.Entry
 }
 
@@ -58,6 +60,15 @@ func (m modalState) view(styles ui.Styles, width, height int) string {
 	case modalGoToPath:
 		title = "Go to path"
 		content = append(content, m.input.View())
+	case modalConflict:
+		title = "Destination conflict"
+		content = append(content,
+			lipgloss.NewStyle().Bold(true).Render(m.target),
+			styles.Muted.Render(m.message),
+			"",
+			styles.Footer.Render("o overwrite  s skip  k keep both"),
+			styles.Footer.Render("O/S/K apply to all  •  x cancel"),
+		)
 	case modalDelete:
 		title = "Delete"
 		noun := "entry"
@@ -73,7 +84,9 @@ func (m modalState) view(styles ui.Styles, width, height int) string {
 	default:
 		return ""
 	}
-	content = append(content, styles.Footer.Render("enter confirm  •  esc cancel"))
+	if m.kind != modalDelete && m.kind != modalConflict {
+		content = append(content, styles.Footer.Render("enter confirm  •  esc cancel"))
+	}
 	if m.err != nil {
 		content = append(content, styles.Error.Render(m.err.Error()))
 	}
