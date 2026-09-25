@@ -339,8 +339,23 @@ func (f *FS) Close() error {
 			_ = f.stdin.Close()
 		}
 		if f.client != nil {
-			if err := f.client.Close(); err != nil && !errors.Is(err, io.EOF) {
-				f.closeErr = err
+			clientDone := make(chan error, 1)
+			go func() { clientDone <- f.client.Close() }()
+			select {
+			case err := <-clientDone:
+				if err != nil && !errors.Is(err, io.EOF) {
+					f.closeErr = err
+				}
+			case <-time.After(shutdownTimeout):
+				if f.command != nil && f.command.Process != nil {
+					_ = f.command.Process.Kill()
+				}
+				if err := <-clientDone; err != nil && !errors.Is(err, io.EOF) && f.closeErr == nil {
+					f.closeErr = err
+				}
+				if f.closeErr == nil {
+					f.closeErr = errors.New("timed out closing remote SFTP client")
+				}
 			}
 		}
 		if f.command == nil || f.command.Process == nil {
