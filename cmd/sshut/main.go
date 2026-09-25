@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	tea "charm.land/bubbletea/v2"
@@ -10,13 +11,27 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 2 {
-		fmt.Fprintln(os.Stderr, "usage: sshut [user@host]")
+	args := os.Args[1:]
+	if len(args) > 1 {
+		usage(os.Stderr)
 		os.Exit(2)
 	}
+	if len(args) == 1 {
+		switch args[0] {
+		case "-h", "--help":
+			usage(os.Stdout)
+			return
+		default:
+			if len(args[0]) > 0 && args[0][0] == '-' {
+				usage(os.Stderr)
+				os.Exit(2)
+			}
+		}
+	}
+
 	destination := ""
-	if len(os.Args) == 2 {
-		destination = os.Args[1]
+	if len(args) == 1 {
+		destination = args[0]
 	}
 
 	finalModel, err := tea.NewProgram(app.New(destination)).Run()
@@ -30,4 +45,9 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+func usage(output io.Writer) {
+	fmt.Fprintln(output, "usage: sshut [user@host]")
+	fmt.Fprintln(output, "       sshut --help")
 }
