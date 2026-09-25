@@ -98,6 +98,10 @@ func (p Pane) View(styles Styles, width, height int, active bool) string {
 	innerHeight := height - 2
 
 	header := p.header(styles, innerWidth)
+	// View receives a value because Bubble Tea models are values. Recompute the
+	// window for this render rather than relying on a mutation that would be
+	// discarded after View returns.
+	p.clampOffset(innerHeight - 2)
 	lines := make([]string, 0, innerHeight)
 	lines = append(lines, header, "")
 	lines = append(lines, p.visibleRows(styles, innerWidth, innerHeight-2)...)

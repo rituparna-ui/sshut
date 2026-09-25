@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +59,29 @@ func TestPaneView(t *testing.T) {
 		if !contains(view, want) {
 			t.Fatalf("view does not contain %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestPaneViewKeepsCursorVisible(t *testing.T) {
+	t.Parallel()
+
+	entries := make([]filesystem.Entry, 20)
+	for index := range entries {
+		entries[index] = filesystem.Entry{
+			Name: fmt.Sprintf("file-%02d.txt", index),
+			Path: fmt.Sprintf("/tmp/file-%02d.txt", index),
+			Kind: filesystem.KindFile,
+		}
+	}
+	pane := NewPane("LOCAL")
+	pane.SetEntries(entries)
+	pane.Cursor = 15
+	view := pane.View(NewStyles(), 50, 8, true)
+	if !strings.Contains(view, "file-15.txt") {
+		t.Fatalf("cursor entry is not visible:\n%s", view)
+	}
+	if strings.Contains(view, "file-00.txt") {
+		t.Fatalf("viewport did not scroll past the first page:\n%s", view)
 	}
 }
 
