@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -59,6 +60,43 @@ func TestModelLoadsLocalHome(t *testing.T) {
 	}
 	if model.local.Entries[0].Name != ".." || model.local.Entries[1].Name != "documents" {
 		t.Fatalf("unexpected entries: %#v", model.local.Entries)
+	}
+}
+
+func TestModelRemotePaneAndFocus(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "remote.txt"), []byte("remote"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	remoteBackend := local.NewAt(root)
+	model := New("production")
+	if !model.remote.Loading {
+		t.Fatal("remote pane did not start in loading state")
+	}
+
+	updated, listCommand := model.Update(remoteConnectedMsg{backend: remoteBackend, path: root})
+	model = updated.(Model)
+	if listCommand == nil {
+		t.Fatal("remote connection returned no list command")
+	}
+	updated, _ = model.Update(listCommand().(directoryLoadedMsg))
+	model = updated.(Model)
+	if model.remote.Path != root || len(model.remote.Entries) != 2 {
+		t.Fatalf("remote pane was not loaded: path=%q entries=%#v", model.remote.Path, model.remote.Entries)
+	}
+
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = updated.(Model)
+	if model.active != remoteSide {
+		t.Fatalf("active side = %v, want remote", model.active)
+	}
+	view := model.View().Content
+	for _, want := range []string{"LOCAL", "REMOTE production", "remote.txt"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("split view does not contain %q:\n%s", want, view)
+		}
 	}
 }
 
