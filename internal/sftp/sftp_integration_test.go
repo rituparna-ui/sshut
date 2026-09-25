@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/rituu/sshut/internal/filesystem"
+	"github.com/rituu/sshut/internal/local"
+	"github.com/rituu/sshut/internal/transfer"
 )
 
 // TestSystemSFTPServer exercises the same SFTP protocol path used after the
@@ -61,5 +65,37 @@ func TestSystemSFTPServer(t *testing.T) {
 	}
 	if err := backend.RemoveAll(ctx, name); err != nil {
 		t.Fatalf("remove: %v", err)
+	}
+
+	sourceRoot := t.TempDir()
+	sourcePath := filepath.Join(sourceRoot, "transfer.txt")
+	if err := os.WriteFile(sourcePath, []byte("remote transfer"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	source := local.NewAt(sourceRoot)
+	sourceEntry, err := source.Stat(ctx, sourcePath)
+	if err != nil {
+		t.Fatalf("stat source: %v", err)
+	}
+	destinationDir := filepath.Join(home, ".sshut-transfer-integration")
+	if err := backend.MkdirAll(ctx, destinationDir, 0o755); err != nil {
+		t.Fatalf("create remote destination: %v", err)
+	}
+	plan, err := transfer.BuildPlan(ctx, source, backend, destinationDir, []filesystem.Entry{sourceEntry}, nil)
+	if err != nil {
+		t.Fatalf("build transfer plan: %v", err)
+	}
+	if err := transfer.Execute(ctx, plan, source, backend, nil); err != nil {
+		t.Fatalf("execute transfer: %v", err)
+	}
+	transferred, err := os.ReadFile(filepath.Join(destinationDir, "transfer.txt"))
+	if err != nil {
+		t.Fatalf("read transferred file: %v", err)
+	}
+	if string(transferred) != "remote transfer" {
+		t.Fatalf("transferred contents = %q", transferred)
+	}
+	if err := backend.RemoveAll(ctx, destinationDir); err != nil {
+		t.Fatalf("remove transfer destination: %v", err)
 	}
 }
