@@ -240,15 +240,16 @@ func (f *FS) Replace(ctx context.Context, oldName, newName string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, ok := f.client.HasExtension("posix-rename@openssh.com"); ok {
-		return f.client.PosixRename(oldName, newName)
-	}
-	if _, err := f.client.Lstat(newName); err == nil {
-		if err := f.client.Remove(newName); err != nil {
+	destination, err := f.client.Lstat(newName)
+	if err == nil && destination.IsDir() {
+		if err := f.RemoveAll(ctx, newName); err != nil {
 			return err
 		}
-	} else if !os.IsNotExist(err) {
+	} else if err != nil && !os.IsNotExist(err) {
 		return err
+	}
+	if _, ok := f.client.HasExtension("posix-rename@openssh.com"); ok {
+		return f.client.PosixRename(oldName, newName)
 	}
 	return f.client.Rename(oldName, newName)
 }

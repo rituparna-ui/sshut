@@ -94,9 +94,16 @@ func (*FS) Rename(_ context.Context, oldName, newName string) error {
 	return os.Rename(oldName, newName)
 }
 
-// Replace atomically replaces newName with oldName when the platform supports
-// same-filesystem rename semantics.
+// Replace moves oldName onto newName. Different entry types require removing
+// the old destination first; same-type replacement uses rename semantics.
 func (*FS) Replace(_ context.Context, oldName, newName string) error {
+	if info, err := os.Lstat(newName); err == nil && info.IsDir() {
+		if err := os.RemoveAll(newName); err != nil {
+			return err
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	return os.Rename(oldName, newName)
 }
 
