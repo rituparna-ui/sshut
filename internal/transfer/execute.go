@@ -16,6 +16,8 @@ import (
 type Phase string
 
 const (
+	PhaseQueued       Phase = "queued"
+	PhasePlanning     Phase = "planning"
 	PhaseTransferring Phase = "transferring"
 	PhaseComplete     Phase = "complete"
 	PhaseSkipped      Phase = "skipped"
